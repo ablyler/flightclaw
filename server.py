@@ -121,6 +121,7 @@ def _build_filters(
     earliest_departure=None, latest_departure=None,
     earliest_arrival=None, latest_arrival=None,
     max_layover_duration=None, sort_by=None,
+    exclude_basic_economy=False,
 ):
     origin = Airport[orig_code]
     destination = Airport[dest_code]
@@ -162,6 +163,7 @@ def _build_filters(
         max_duration=max_duration,
         layover_restrictions=layover,
         sort_by=SORT_MAP.get(sort_by, SortBy.NONE),
+        exclude_basic_economy=exclude_basic_economy,
     )
 
 
@@ -201,6 +203,7 @@ def search_flights(
     latest_arrival: int | None = None,
     max_layover_duration: int | None = None,
     sort_by: str | None = None,
+    exclude_basic_economy: bool = False,
 ) -> str:
     """Search Google Flights for prices on a route.
 
@@ -226,6 +229,7 @@ def search_flights(
         latest_arrival: Latest arrival hour 1-23
         max_layover_duration: Maximum layover time in minutes
         sort_by: Sort results by BEST, CHEAPEST, DEPARTURE, ARRIVAL, or DURATION
+        exclude_basic_economy: Exclude basic economy fares (default False)
     """
     combos = _expand_routes(origin, destination, date, date_to)
     output = []
@@ -240,6 +244,7 @@ def search_flights(
                 earliest_departure, latest_departure,
                 earliest_arrival, latest_arrival,
                 max_layover_duration, sort_by,
+                exclude_basic_economy,
             )
         except KeyError as e:
             output.append(f"Unknown airport code: {e}")
@@ -394,6 +399,7 @@ def track_flight(
     airlines: str | None = None,
     max_price: int | None = None,
     max_duration: int | None = None,
+    exclude_basic_economy: bool = False,
 ) -> str:
     """Add a flight route to price tracking. Records current price and monitors for drops.
 
@@ -413,6 +419,7 @@ def track_flight(
         airlines: Filter to specific airlines, comma-separated IATA codes (e.g. BA,AA,DL)
         max_price: Maximum price in USD
         max_duration: Maximum total flight duration in minutes
+        exclude_basic_economy: Exclude basic economy fares (default False)
     """
     combos = _expand_routes(origin, destination, date, date_to)
     tracked = _load_tracked()
@@ -435,6 +442,7 @@ def track_flight(
                 orig_code, dest_code, d, return_date, cabin, stops,
                 adults, children, infants_in_seat, infants_on_lap,
                 airlines, max_price, max_duration,
+                exclude_basic_economy=exclude_basic_economy,
             )
         except KeyError as e:
             output.append(f"Unknown airport code: {e}")
@@ -462,6 +470,7 @@ def track_flight(
             "cabin": cabin,
             "stops": stops,
             "target_price": target_price,
+            "exclude_basic_economy": exclude_basic_economy,
             "currency": currency,
             "added_at": now,
             "price_history": [price_entry],
@@ -509,6 +518,7 @@ def check_prices(threshold: float = 10.0) -> str:
             filters = _build_filters(
                 entry["origin"], entry["destination"], entry["date"],
                 entry.get("return_date"), entry.get("cabin", "ECONOMY"), entry.get("stops", "ANY"),
+                exclude_basic_economy=entry.get("exclude_basic_economy", False),
             )
             results, detected_currency = search_with_currency(filters, top_n=1)
             currency = detected_currency or currency

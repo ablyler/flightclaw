@@ -71,6 +71,7 @@ def check_route(entry):
         flight_segments=segments,
         seat_type=SEAT_MAP.get(entry.get("cabin", "ECONOMY"), SeatType.ECONOMY),
         stops=STOPS_MAP.get(entry.get("stops", "ANY"), MaxStops.ANY),
+        exclude_basic_economy=entry.get("exclude_basic_economy", False),
     )
 
     results, currency = search_with_currency(filters, top_n=1)

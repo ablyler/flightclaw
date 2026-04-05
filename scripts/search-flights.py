@@ -42,6 +42,7 @@ def parse_args():
     parser.add_argument("--cabin", default="ECONOMY", choices=SEAT_MAP.keys(), help="Cabin class")
     parser.add_argument("--stops", default="ANY", choices=STOPS_MAP.keys(), help="Max stops")
     parser.add_argument("--results", type=int, default=5, help="Number of results")
+    parser.add_argument("--exclude-basic", "-eb", action="store_true", help="Exclude basic economy fares")
     return parser.parse_args()
 
 
@@ -116,6 +117,7 @@ def main():
             flight_segments=segments,
             seat_type=SEAT_MAP[args.cabin],
             stops=STOPS_MAP[args.stops],
+            exclude_basic_economy=args.exclude_basic,
         )
 
         print(f"\nSearching {orig_code} -> {dest_code} on {date}...")

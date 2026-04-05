@@ -60,6 +60,7 @@ def parse_args():
     parser.add_argument("--cabin", default="ECONOMY", choices=SEAT_MAP.keys())
     parser.add_argument("--stops", default="ANY", choices=STOPS_MAP.keys())
     parser.add_argument("--target-price", type=float, help="Alert when price drops below this")
+    parser.add_argument("--exclude-basic", "-eb", action="store_true", help="Exclude basic economy fares")
     return parser.parse_args()
 
 
@@ -116,6 +117,7 @@ def main():
             flight_segments=segments,
             seat_type=SEAT_MAP[args.cabin],
             stops=STOPS_MAP[args.stops],
+            exclude_basic_economy=args.exclude_basic,
         )
 
         print(f"Searching {orig_code} -> {dest_code} on {date}...")
@@ -141,6 +143,7 @@ def main():
             "cabin": args.cabin,
             "stops": args.stops,
             "target_price": args.target_price,
+            "exclude_basic_economy": args.exclude_basic,
             "currency": currency,
             "added_at": now,
             "price_history": [price_entry],
