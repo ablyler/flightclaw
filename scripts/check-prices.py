@@ -89,6 +89,8 @@ def format_money(value):
 
 
 def alert_label_for_trip(trip):
+    if trip.get("trackingKind") == "family-watchlist":
+        return "Family Flight Watch"
     if trip.get("owner"):
         return "Friend Flight Watch"
     names = (trip.get("passengers") or {}).get("names") or []
