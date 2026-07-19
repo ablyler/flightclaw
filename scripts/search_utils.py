@@ -144,7 +144,10 @@ def search_with_currency(filters: FlightSearchFilters, top_n: int = 5, exclude_b
     # Parse flights using fli's parser
     results = [SearchFlights._parse_flights_data(flight) for flight in flights_data]
 
-    if filters.trip_type == TripType.ONE_WAY or filters.flight_segments[0].selected_flight is not None:
+    # Google Flights returns complete itineraries for one-way and multi-city
+    # searches.  Only round trips require the selected-outbound follow-up call
+    # used below to enumerate a matching return slice.
+    if filters.trip_type in (TripType.ONE_WAY, TripType.MULTI_CITY) or filters.flight_segments[0].selected_flight is not None:
         paired = list(zip(results, booking_tokens))
         return paired, currency or "USD"
 

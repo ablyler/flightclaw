@@ -57,6 +57,10 @@ python skills/flightclaw/scripts/track-flight.py LHR JFK 2025-07-01
 python skills/flightclaw/scripts/track-flight.py LHR JFK 2025-07-01 --target-price 400
 python skills/flightclaw/scripts/track-flight.py LHR JFK 2025-07-01 --return-date 2025-07-08 --cabin BUSINESS
 python skills/flightclaw/scripts/track-flight.py DTW MCO 2026-10-09 --return-date 2026-10-15 --exclude-basic --target-price 500
+# Exact multi-city itinerary (ordered flight numbers; starts with a manual baseline if Google has no exact live match)
+python skills/flightclaw/scripts/track-multi-city.py --id luca-example --label "Luca multi-city" \
+  --segments '[{"origin":"COS","destination":"MCO","date":"2026-10-09"},{"origin":"MCO","destination":"DTW","date":"2026-10-15"},{"origin":"DTW","destination":"DEN","date":"2026-10-18"}]' \
+  --flight-numbers '4696,2354,1852,2431' --stops ONE_STOP --exclude-basic --target-price 1021 --baseline-price 1021
 # Track multiple airports and dates
 python skills/flightclaw/scripts/track-flight.py LHR,MAN JFK,EWR 2025-07-01 --date-to 2025-07-03 --target-price 400
 ```

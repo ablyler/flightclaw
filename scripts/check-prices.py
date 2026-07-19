@@ -6,6 +6,7 @@ import json
 import os
 import sys
 from datetime import datetime, timezone
+from pathlib import Path
 
 from fli.models import (
     Airport,
@@ -52,19 +53,113 @@ def save_tracked(tracked):
 def parse_args():
     parser = argparse.ArgumentParser(description="Check tracked flight prices")
     parser.add_argument("--threshold", type=float, default=10, help="Percentage drop to alert on (default: 10)")
+    parser.add_argument("--manifest", type=Path, help="Optional Mission Control flights manifest to update")
     return parser.parse_args()
 
 
+def load_manifest(path):
+    if not path:
+        return None
+    with open(path, "r") as f:
+        return json.load(f)
+
+
+def save_manifest(path, manifest):
+    with open(path, "w") as f:
+        json.dump(manifest, f, indent=2)
+        f.write("\n")
+
+
+def manifest_trips(manifest):
+    if isinstance(manifest, dict):
+        return manifest.get("trips", [])
+    if isinstance(manifest, list):
+        return manifest
+    return []
+
+
+def tracking_id_for_trip(trip):
+    price_tracking = trip.get("priceTracking") or {}
+    tracking_ref = trip.get("trackingRef") or {}
+    return price_tracking.get("trackedId") or tracking_ref.get("id")
+
+
+def format_money(value):
+    return f"${value:,.2f}"
+
+
+def alert_label_for_trip(trip):
+    if trip.get("owner"):
+        return "Friend Flight Watch"
+    names = (trip.get("passengers") or {}).get("names") or []
+    core_names = {"Andy", "Alex", "Becca", "Piper", "Kathy"}
+    if any(name not in core_names for name in names):
+        return "Family Flight Watch"
+    return "Flight Price Alert"
+
+
+def update_manifest_trip(trip, price, now):
+    passengers = trip.get("passengers") or {}
+    passenger_count = passengers.get("count") or 1
+    current_total = round(price * passenger_count, 2)
+    trip["lastChecked"] = now
+    trip["currentPricePP"] = price
+    trip["currentTotal"] = current_total
+
+    booked = trip.get("booked") or {}
+    booked_price = booked.get("pricePP")
+    if booked_price is not None:
+        diff_pp = round(price - booked_price, 2)
+        diff_total = round(diff_pp * passenger_count, 2)
+        trip["vsBooked"] = {
+            "diffPP": diff_pp,
+            "diffTotal": diff_total,
+            "direction": "down" if diff_pp < 0 else "up" if diff_pp > 0 else "same",
+        }
+
+    threshold = (trip.get("alertThreshold") or {}).get("pricePP")
+    compare_price = threshold if threshold is not None else booked_price
+    if compare_price is None or price >= compare_price:
+        return None
+
+    savings_pp = round(compare_price - price, 2)
+    savings_total = round(savings_pp * passenger_count, 2)
+    dates = trip.get("dates") or {}
+    confirmation = booked.get("confirmation") or trip.get("owner") or "watchlist"
+    label = alert_label_for_trip(trip)
+    rebooking = "yes" if trip.get("status") == "booked" and booked else "no"
+    return "\n".join([
+        f"{label} - {trip.get('name', 'Tracked flight')}",
+        f"Rebooking opportunity: {rebooking}",
+        f"Trip: {trip.get('name', 'Tracked flight')} ({confirmation}) - {trip.get('route', 'route unknown')}",
+        f"Route: {dates.get('outbound', '?')} to {dates.get('return', '?')} - {passenger_count} passenger(s)",
+        f"Current: {format_money(price)}/pp - {format_money(current_total)} total",
+        f"Threshold: {format_money(compare_price)}/pp",
+        f"Savings: {format_money(savings_pp)}/pp - {format_money(savings_total)} total",
+    ])
+
+
 def check_route(entry):
-    origin = Airport[entry["origin"]]
-    destination = Airport[entry["destination"]]
-
-    segments = [FlightSegment(departure_airport=[[origin, 0]], arrival_airport=[[destination, 0]], travel_date=entry["date"])]
-    trip_type = TripType.ONE_WAY
-
-    if entry.get("return_date"):
-        segments.append(FlightSegment(departure_airport=[[destination, 0]], arrival_airport=[[origin, 0]], travel_date=entry["return_date"]))
-        trip_type = TripType.ROUND_TRIP
+    multi_city_segments = entry.get("multi_city_segments") or []
+    if multi_city_segments:
+        segments = []
+        for segment in multi_city_segments:
+            origin = Airport[segment["origin"]]
+            destination = Airport[segment["destination"]]
+            segments.append(FlightSegment(
+                departure_airport=[[origin, 0]],
+                arrival_airport=[[destination, 0]],
+                travel_date=segment["date"],
+            ))
+        trip_type = TripType.MULTI_CITY
+    else:
+        origin = Airport[entry["origin"]]
+        destination = Airport[entry["destination"]]
+        segments = [FlightSegment(departure_airport=[[origin, 0]], arrival_airport=[[destination, 0]], travel_date=entry["date"])]
+        trip_type = TripType.ONE_WAY
+        if entry.get("return_date"):
+            segments.append(FlightSegment(departure_airport=[[destination, 0]], arrival_airport=[[origin, 0]], travel_date=entry["return_date"]))
+            trip_type = TripType.ROUND_TRIP
 
     # Build airline filter if preferred_airline is specified
     airlines = None
@@ -86,11 +181,12 @@ def check_route(entry):
 
     target_out = entry.get("outbound_flight_number")
     target_ret = entry.get("return_flight_number")
+    target_sequence = [str(value) for value in entry.get("flight_numbers", [])]
 
     exclude_basic = entry.get("exclude_basic", False)
-    # Flight-number matching happens after the search, so a specific pair could
-    # sit beyond the default window. Search a wider set when tracking exact flights.
-    top_n = 50 if (target_out or target_ret) else 10
+    # Flight-number matching happens after the search, so a specific pair or
+    # multi-city sequence could sit beyond the default result window.
+    top_n = 50 if (target_out or target_ret or target_sequence) else 10
     results, currency = search_with_currency(filters, top_n=top_n, exclude_basic_economy=exclude_basic)
     if not results:
         return None, None, None, currency
@@ -112,6 +208,12 @@ def check_route(entry):
             outbound, ret = flight_data, None
         if not outbound.legs:
             continue
+        # A multi-city Google Flights result contains all requested slices in
+        # its ordered leg list; its single price is the full itinerary price.
+        if target_sequence:
+            actual_sequence = [str(item.flight_number) for item in outbound.legs]
+            if actual_sequence != target_sequence:
+                continue
         leg = outbound.legs[0]
         ret_leg = ret.legs[0] if ret and ret.legs else None
 
@@ -175,6 +277,13 @@ def check_route(entry):
 def main():
     args = parse_args()
     tracked = load_tracked()
+    manifest = load_manifest(args.manifest) if args.manifest else None
+    trips_by_tracking_id = {
+        tracking_id_for_trip(trip): trip
+        for trip in manifest_trips(manifest)
+        if tracking_id_for_trip(trip)
+    } if manifest is not None else {}
+    manifest_changed = False
 
     if not tracked:
         print("No flights being tracked. Use track-flight.py to add routes.")
@@ -205,6 +314,11 @@ def main():
             "airline": airline,
         })
         entry["currency"] = currency
+        if entry.get("id") in trips_by_tracking_id:
+            manifest_alert = update_manifest_trip(trips_by_tracking_id[entry["id"]], price, now)
+            manifest_changed = True
+            if manifest_alert:
+                alerts.append(manifest_alert)
 
         # Print all flight options, deduped by outbound flight (show best price per outbound)
         if all_flights:
@@ -233,7 +347,7 @@ def main():
 
             if change < 0:
                 print(f"  → Best: {fmt_price(price, currency)} - DOWN {fmt_price(abs(change), currency)} ({abs(pct):.1f}%)")
-                if abs(pct) >= args.threshold:
+                if not args.manifest and abs(pct) >= args.threshold:
                     alerts.append(f"PRICE DROP: {route} is now {fmt_price(price, currency)} (was {fmt_price(last_price, currency)}, down {abs(pct):.1f}%)")
             elif change > 0:
                 print(f"  → Best: {fmt_price(price, currency)} - up {fmt_price(change, currency)} ({pct:.1f}%)")
@@ -242,10 +356,12 @@ def main():
         else:
             print(f"  → Best: {fmt_price(price, currency)} - first price recorded")
 
-        if entry.get("target_price") and price <= entry["target_price"]:
+        if not args.manifest and entry.get("target_price") and price <= entry["target_price"]:
             alerts.append(f"TARGET REACHED: {route} is {fmt_price(price, currency)} (target: {fmt_price(entry['target_price'], currency)})")
 
     save_tracked(tracked)
+    if args.manifest and manifest is not None and manifest_changed:
+        save_manifest(args.manifest, manifest)
 
     if alerts:
         print(f"\n{'='*60}")
